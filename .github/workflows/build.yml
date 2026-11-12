@@ -2,6 +2,8 @@ name: Build DV APK
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -16,7 +18,14 @@ jobs:
           chmod +x gradlew
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/*.apk DV.apk
       - uses: actions/upload-artifact@v4
         with:
           name: DV-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: DV.apk
+      - name: Publish to Releases (tag "latest")
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest DV.apk --title "DV 最新版" --notes "自动编译: ${GITHUB_SHA::7}" --target "$GITHUB_SHA"

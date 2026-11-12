@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DV 图标: 深色圆底 + 一块"屏幕" + 向下的投送箭头 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path android:fillColor="#FF1B2433"
+        android:pathData="M24,2A22,22 0,1 1,23.99,2Z" />
+    <path android:fillColor="#FF4FC3F7"
+        android:pathData="M11,12h26a2,2 0,0 1,2 2v14a2,2 0,0 1,-2 2H11a2,2 0,0 1,-2 -2V14a2,2 0,0 1,2 -2z" />
+    <path android:fillColor="#FF1B2433"
+        android:pathData="M13,15h22v11H13z" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M22,17h4v4h3l-5,5 -5,-5h3z" />
+    <path android:fillColor="#FF4FC3F7"
+        android:pathData="M19,33h10a1.5,1.5 0,0 1,1.5 1.5v4a1.5,1.5 0,0 1,-1.5 1.5H19a1.5,1.5 0,0 1,-1.5 -1.5v-4A1.5,1.5 0,0 1,19 33z" />
+</vector>

@@ -1,0 +1,28 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace = 'com.hans.dv'
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = 'com.hans.dv'
+        minSdk = 24
+        targetSdk = 34
+        versionCode = 1
+        versionName = '0.1'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            signingConfig = signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}

@@ -10,14 +10,27 @@ android {
         applicationId = 'com.hans.dv'
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = '0.2'
+        versionCode = 3
+        versionName = '0.3'
+    }
+
+    // 固定签名: 每次 CI 编译出来的 APK 签名一致, 才能直接覆盖升级
+    signingConfigs {
+        dv {
+            storeFile = file('dv.keystore')
+            storePassword = 'dvdvdv'
+            keyAlias = 'dv'
+            keyPassword = 'dvdvdv'
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.dv
+        }
         release {
             minifyEnabled = false
-            signingConfig = signingConfigs.debug
+            signingConfig = signingConfigs.dv
         }
     }
 

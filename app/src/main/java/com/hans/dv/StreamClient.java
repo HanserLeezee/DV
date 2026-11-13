@@ -35,7 +35,8 @@ final class StreamClient {
     }
 
     private static final String TAG = "DV";
-    private static final String MIME = "video/avc";
+    private static final String MIME_AVC = "video/avc";
+    private static final String MIME_HEVC = "video/hevc";
     private static final int MSG_INFO = 0, MSG_CONFIG = 1, MSG_KEY = 2, MSG_FRAME = 3;
     private static final byte[] START = {0, 0, 0, 1};
     private static final byte[] HELLO_STREAM = {'D', 'V', '1', 'S'};
@@ -67,7 +68,9 @@ final class StreamClient {
     private Decoder decoder;
 
     private int infoW = 1920, infoH = 1080;
-    private byte[] curSps, curPps;
+    private String infoCodec = "", infoEncoder = "";
+    private double infoBitrate;
+    private byte[] curConfig;
     private byte[] buf = new byte[1 << 20];
 
     // 统计
@@ -165,6 +168,9 @@ final class StreamClient {
                         throw new IOException("bad info");
                     }
                     int w = o.optInt("width", 0), h = o.optInt("height", 0);
+                    infoCodec = o.optString("codec", "h264");
+                    infoEncoder = o.optString("encoder", "");
+                    infoBitrate = o.optDouble("bitrate", 0);
                     if (w > 0 && h > 0) {
                         infoW = w;
                         infoH = h;
@@ -173,15 +179,20 @@ final class StreamClient {
                     break;
                 }
                 case MSG_CONFIG: {
-                    int sl = ((buf[0] & 0xFF) << 8) | (buf[1] & 0xFF);
-                    byte[] sps = Arrays.copyOfRange(buf, 2, 2 + sl);
-                    int pl = ((buf[2 + sl] & 0xFF) << 8) | (buf[3 + sl] & 0xFF);
-                    byte[] pps = Arrays.copyOfRange(buf, 4 + sl, 4 + sl + pl);
-                    if (decoder == null || !Arrays.equals(sps, curSps) || !Arrays.equals(pps, curPps)) {
+                    // codec(1) | n(1) | n * (len16 + NAL)
+                    byte[] cfg = Arrays.copyOf(buf, len);
+                    if (decoder == null || !Arrays.equals(cfg, curConfig)) {
+                        boolean hevc = cfg[0] == 1;
+                        int n = cfg[1] & 0xFF, i = 2;
+                        byte[][] nals = new byte[n][];
+                        for (int k = 0; k < n; k++) {
+                            int l = ((cfg[i] & 0xFF) << 8) | (cfg[i + 1] & 0xFF);
+                            nals[k] = Arrays.copyOfRange(cfg, i + 2, i + 2 + l);
+                            i += 2 + l;
+                        }
                         releaseDecoder();
-                        curSps = sps;
-                        curPps = pps;
-                        decoder = new Decoder(sps, pps, infoW, infoH);
+                        curConfig = cfg;
+                        decoder = new Decoder(hevc, nals, infoW, infoH);
                         waitKey = true;
                     }
                     break;
@@ -207,8 +218,9 @@ final class StreamClient {
         if (dt < 1_000_000_000L) return;
         double sec = dt / 1e9;
         long lc = latencyCount;
-        String t = String.format(Locale.US, "%dx%d  %.0f fps  %.1f Mbps  解码+显示 %s  丢弃 %d",
-                infoW, infoH, statRendered / sec, statBytes * 8 / sec / 1e6,
+        String t = String.format(Locale.US, "%s %dx%d  %.0f fps  %.1f Mbps (上限 %.0f)  解码+显示 %s  丢弃 %d",
+                infoCodec.equals("hevc") ? "H.265" : "H.264",
+                infoW, infoH, statRendered / sec, statBytes * 8 / sec / 1e6, infoBitrate,
                 lc > 0 ? (latencySum / lc / 1000) + " ms" : "-", statDropped);
         listener.onStats(t);
         statT0 = now;
@@ -223,7 +235,7 @@ final class StreamClient {
             decoder.release();
             decoder = null;
         }
-        curSps = curPps = null;
+        curConfig = null;
     }
 
     private static void sleep(long ms) {
@@ -246,19 +258,20 @@ final class StreamClient {
         private final long[] ringT = new long[128];
         private int ringPos;
 
-        Decoder(byte[] sps, byte[] pps, int w, int h) throws IOException {
-            MediaFormat base = MediaFormat.createVideoFormat(MIME, w, h);
-            String name = pickDecoder(base);
+        Decoder(boolean hevc, byte[][] nals, int w, int h) throws IOException {
+            String mime = hevc ? MIME_HEVC : MIME_AVC;
+            MediaFormat base = MediaFormat.createVideoFormat(mime, w, h);
+            String name = pickDecoder(mime, base);
             Log.i(TAG, "decoder: " + name + " " + w + "x" + h);
 
             MediaCodec c = null;
             Exception last = null;
             for (int attempt = 0; attempt < 2 && c == null; attempt++) {
-                MediaFormat f = buildFormat(sps, pps, w, h, name, attempt == 0);
+                MediaFormat f = buildFormat(mime, hevc, nals, w, h, name, attempt == 0);
                 MediaCodec tmp = null;
                 try {
                     tmp = name != null ? MediaCodec.createByCodecName(name)
-                            : MediaCodec.createDecoderByType(MIME);
+                            : MediaCodec.createDecoderByType(mime);
                     tmp.configure(f, surface, null, 0);
                     tmp.start();
                     c = tmp;
@@ -274,10 +287,18 @@ final class StreamClient {
             outThread.start();
         }
 
-        private MediaFormat buildFormat(byte[] sps, byte[] pps, int w, int h, String name, boolean vendor) {
-            MediaFormat f = MediaFormat.createVideoFormat(MIME, w, h);
-            f.setByteBuffer("csd-0", withStartCode(sps));
-            f.setByteBuffer("csd-1", withStartCode(pps));
+        private MediaFormat buildFormat(String mime, boolean hevc, byte[][] nals, int w, int h,
+                                        String name, boolean vendor) {
+            MediaFormat f = MediaFormat.createVideoFormat(mime, w, h);
+            if (hevc) {
+                // H.265: VPS+SPS+PPS 全部放进 csd-0
+                f.setByteBuffer("csd-0", withStartCodes(nals, 0, nals.length));
+            } else {
+                // H.264: csd-0 = SPS, csd-1 = PPS
+                int nSps = Math.max(1, nals.length - 1);
+                f.setByteBuffer("csd-0", withStartCodes(nals, 0, nSps));
+                if (nals.length > nSps) f.setByteBuffer("csd-1", withStartCodes(nals, nSps, nals.length));
+            }
             f.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, Math.max(w * h, 2 << 20));
             if (Build.VERSION.SDK_INT >= 30) f.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
             if (Build.VERSION.SDK_INT >= 23) f.setInteger(MediaFormat.KEY_PRIORITY, 0);
@@ -407,14 +428,17 @@ final class StreamClient {
         }
     }
 
-    private static ByteBuffer withStartCode(byte[] nal) {
-        ByteBuffer b = ByteBuffer.allocate(START.length + nal.length);
-        b.put(START).put(nal).flip();
+    private static ByteBuffer withStartCodes(byte[][] nals, int from, int to) {
+        int size = 0;
+        for (int i = from; i < to; i++) size += START.length + nals[i].length;
+        ByteBuffer b = ByteBuffer.allocate(size);
+        for (int i = from; i < to; i++) b.put(START).put(nals[i]);
+        b.flip();
         return b;
     }
 
-    /** 选硬件 H.264 解码器, 优先支持低延迟特性的。 */
-    private static String pickDecoder(MediaFormat fmt) {
+    /** 选硬件解码器, 优先支持低延迟特性的。 */
+    private static String pickDecoder(String mime, MediaFormat fmt) {
         String best = null;
         int bestScore = -1;
         try {
@@ -422,7 +446,7 @@ final class StreamClient {
             for (MediaCodecInfo ci : infos) {
                 if (ci.isEncoder()) continue;
                 boolean avc = false;
-                for (String t : ci.getSupportedTypes()) if (t.equalsIgnoreCase(MIME)) avc = true;
+                for (String t : ci.getSupportedTypes()) if (t.equalsIgnoreCase(mime)) avc = true;
                 if (!avc) continue;
                 String n = ci.getName().toLowerCase(Locale.US);
                 boolean sw = n.startsWith("omx.google.") || n.startsWith("c2.android.")
@@ -430,7 +454,7 @@ final class StreamClient {
                 if (Build.VERSION.SDK_INT >= 29) sw = ci.isSoftwareOnly();
                 int score = sw ? 0 : 10;
                 try {
-                    MediaCodecInfo.CodecCapabilities caps = ci.getCapabilitiesForType(MIME);
+                    MediaCodecInfo.CodecCapabilities caps = ci.getCapabilitiesForType(mime);
                     if (Build.VERSION.SDK_INT >= 30
                             && caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)) {
                         score += 5;

@@ -8,7 +8,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Display;
+import android.view.GestureDetector;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -18,8 +20,9 @@ import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
-/** 全屏显示 PC 画面。单击切换统计信息, 返回键退出。 */
+/** 全屏显示 PC 画面。单击: 统计信息; 双击: 完整显示 / 填满屏幕 (VR 盒子用填满); 返回键退出。 */
 public class StreamActivity extends Activity implements StreamClient.Listener {
 
     private FrameLayout root;
@@ -28,6 +31,7 @@ public class StreamActivity extends Activity implements StreamClient.Listener {
     private StreamClient client;
     private WifiManager.WifiLock wifiLock;
     private int videoW, videoH;
+    private boolean fillMode;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,8 +69,30 @@ public class StreamActivity extends Activity implements StreamClient.Listener {
         root.addView(statsText, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START));
 
-        root.setOnClickListener(v -> statsText.setVisibility(
-                statsText.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        fillMode = getSharedPreferences("dv", MODE_PRIVATE).getBoolean("fill", false);
+        GestureDetector gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDown(MotionEvent e) {
+                return true;
+            }
+
+            @Override
+            public boolean onSingleTapConfirmed(MotionEvent e) {
+                statsText.setVisibility(statsText.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+                return true;
+            }
+
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                fillMode = !fillMode;
+                getSharedPreferences("dv", MODE_PRIVATE).edit().putBoolean("fill", fillMode).apply();
+                applyAspect();
+                Toast.makeText(StreamActivity.this,
+                        fillMode ? "填满屏幕 (上下会裁掉一点, 适合 VR 盒子)" : "完整显示", Toast.LENGTH_SHORT).show();
+                return true;
+            }
+        });
+        root.setOnTouchListener((v, e) -> gd.onTouchEvent(e));
         root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             if (r - l != or - ol || b - t != ob - ot) applyAspect();
         });
@@ -155,15 +181,13 @@ public class StreamActivity extends Activity implements StreamClient.Listener {
 
     // ------------------------------------------------------------ 显示
 
-    /** 按视频比例把 SurfaceView 缩放到屏幕内居中 (黑边), 不拉伸。 */
+    /** 按视频比例缩放, 不拉伸。完整显示 = 留黑边; 填满 = 铺满屏幕, 超出部分裁掉。 */
     private void applyAspect() {
         int W = root.getWidth(), H = root.getHeight();
         if (W == 0 || H == 0 || videoW == 0 || videoH == 0) return;
-        int w = W, h = (int) ((long) W * videoH / videoW);
-        if (h > H) {
-            h = H;
-            w = (int) ((long) H * videoW / videoH);
-        }
+        double sx = (double) W / videoW, sy = (double) H / videoH;
+        double scale = fillMode ? Math.max(sx, sy) : Math.min(sx, sy);
+        int w = (int) Math.round(videoW * scale), h = (int) Math.round(videoH * scale);
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) surfaceView.getLayoutParams();
         if (lp.width != w || lp.height != h) {
             lp.width = w;

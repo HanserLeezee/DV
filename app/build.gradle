@@ -10,8 +10,8 @@ android {
         applicationId = 'com.hans.dv'
         minSdk = 24
         targetSdk = 34
-        versionCode = 3
-        versionName = '0.3'
+        versionCode = 4
+        versionName = '0.4'
     }
 
     // 固定签名: 每次 CI 编译出来的 APK 签名一致, 才能直接覆盖升级

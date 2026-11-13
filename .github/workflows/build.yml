@@ -2,9 +2,6 @@ name: Build DV
 on:
   push:
     branches: [main]
-    tags: ['v*']
-  release:
-    types: [published]
   workflow_dispatch:
 permissions:
   contents: write
@@ -30,9 +27,7 @@ jobs:
           name: DV-apk
           path: DV.apk
 
-      # main 分支每次提交: 更新 "latest" 预发布 (只有 APK)
-      - name: Publish latest APK
-        if: github.ref == 'refs/heads/main'
+      - name: Publish latest APK (开发版)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -41,9 +36,24 @@ jobs:
             --notes "main 分支最新提交 ${GITHUB_SHA::7} 自动编译, 仅含 APK。正式版请看带版本号的 Release。" \
             --target "$GITHUB_SHA"
 
-      # 发布 v* Release (或推送 v* 标签): 打包 PC 端 (带 ffmpeg + adb) 并上传
+      # 正式版: app/build.gradle 的 versionName 有对应的 release-notes/v<版本>.md,
+      # 且这个版本还没发布过 -> 打包电脑端 (带 ffmpeg + adb) 并发布 Release
+      - name: Check version
+        id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="v$(grep -oP "versionName\s*=\s*'\K[^']+" app/build.gradle)"
+          echo "tag=$V" >> "$GITHUB_OUTPUT"
+          if [ -f "release-notes/$V.md" ] && ! gh release view "$V" >/dev/null 2>&1; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version $V"
+
       - name: Package PC
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.ver.outputs.publish == 'true'
+        env:
+          V: ${{ steps.ver.outputs.tag }}
         run: |
           set -e
           D=pkg/DV
@@ -55,21 +65,15 @@ jobs:
           unzip -j -q ff.zip '*/bin/ffmpeg.exe' -d $D/pc/
           pip download --no-deps --only-binary=:all: --platform win_amd64 --python-version 3.12 adbutils -d whl -q
           unzip -j -q whl/*.whl 'adbutils/binaries/adb.exe' 'adbutils/binaries/AdbWinApi.dll' 'adbutils/binaries/AdbWinUsbApi.dll' -d $D/adb/
-          (cd pkg && zip -q -r -9 "../DV-PC-${GITHUB_REF_NAME}.zip" DV)
-          cp DV.apk "DV-${GITHUB_REF_NAME}.apk"
+          (cd pkg && zip -q -r -9 "../DV-PC-$V.zip" DV)
+          cp DV.apk "DV-$V.apk"
           ls -la *.zip *.apk
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.ver.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.ver.outputs.tag }}
         run: |
-          NOTES=release-notes/${GITHUB_REF_NAME}.md
-          [ -f "$NOTES" ] || { echo "DV ${GITHUB_REF_NAME}" > /tmp/n.md; NOTES=/tmp/n.md; }
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" --title "DV ${GITHUB_REF_NAME}" --notes-file "$NOTES"
-            gh release upload "$GITHUB_REF_NAME" "DV-PC-${GITHUB_REF_NAME}.zip" "DV-${GITHUB_REF_NAME}.apk" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" "DV-PC-${GITHUB_REF_NAME}.zip" "DV-${GITHUB_REF_NAME}.apk" \
-              --title "DV ${GITHUB_REF_NAME}" --notes-file "$NOTES" --latest
-          fi
+          gh release create "$V" "DV-PC-$V.zip" "DV-$V.apk" --target "$GITHUB_SHA" \
+            --title "DV $V" --notes-file "release-notes/$V.md" --latest

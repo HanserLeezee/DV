@@ -82,4 +82,4 @@ adb reverse tcp:27183 tcp:27183
 | `adb/` | USB 驱动修复脚本 (adb 本体在 Release 压缩包里) |
 | `release-notes/` | 各版本说明 |
 
-推送 `v*` 标签后，GitHub Actions 会自动编译 APK，并打包含 ffmpeg 和 adb 的电脑端，一起发布为 Release。
+发新版：改 `app/build.gradle` 的 versionName（和 versionCode、`pc/dv_server.py` 的 APP_VERSION_CODE），并加一个 `release-notes/v<版本>.md`，推送到 main 后 GitHub Actions 会自动编译 APK、打包含 ffmpeg 和 adb 的电脑端，并发布 Release。

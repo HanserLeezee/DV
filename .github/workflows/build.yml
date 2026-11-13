@@ -54,6 +54,8 @@ jobs:
         if: steps.ver.outputs.publish == 'true'
         env:
           V: ${{ steps.ver.outputs.tag }}
+          LC_ALL: C.UTF-8
+          LANG: C.UTF-8
         run: |
           set -e
           D=pkg/DV

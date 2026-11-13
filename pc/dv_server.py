@@ -534,7 +534,7 @@ def discovery_loop():
 
 APP_PACKAGE = "com.hans.dv"
 APP_COMPONENT = APP_PACKAGE + "/.MainActivity"
-APP_VERSION_CODE = 4  # 和 android/app/build.gradle 的 versionCode 保持一致
+APP_VERSION_CODE = 5  # 和 android/app/build.gradle 的 versionCode 保持一致
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 

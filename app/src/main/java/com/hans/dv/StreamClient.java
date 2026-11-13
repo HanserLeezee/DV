@@ -38,6 +38,23 @@ final class StreamClient {
     private static final String MIME = "video/avc";
     private static final int MSG_INFO = 0, MSG_CONFIG = 1, MSG_KEY = 2, MSG_FRAME = 3;
     private static final byte[] START = {0, 0, 0, 1};
+    private static final byte[] HELLO_STREAM = {'D', 'V', '1', 'S'};
+    private static final byte[] HELLO_PROBE = {'D', 'V', '1', 'P'};
+
+    /** 探测 host:port 上有没有 DV 服务 (不会启动推流)。USB 转发在电脑端没开服务时也能连上, 所以必须握手确认。 */
+    static boolean probe(String host, int port, int connectTimeoutMs) {
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress(host, port), connectTimeoutMs);
+            s.setSoTimeout(1500);
+            s.getOutputStream().write(HELLO_PROBE);
+            s.getOutputStream().flush();
+            byte[] b = new byte[3];
+            new DataInputStream(s.getInputStream()).readFully(b);
+            return b[0] == 'D' && b[1] == 'V' && b[2] == '!';
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     private final String host;
     private final int port;
@@ -98,7 +115,10 @@ final class StreamClient {
             } catch (Exception e) {
                 if (!running) break;
                 Log.w(TAG, "session ended", e);
-                listener.onStatus("连接断开: " + e.getMessage() + "\n1 秒后重连...");
+                String why = e instanceof java.io.EOFException ? "电脑端关闭了连接 (DV 没在运行?)"
+                        : e instanceof java.net.ConnectException ? "连不上电脑 (DV 没在运行?)"
+                        : e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                listener.onStatus("连接断开: " + why + "\n正在重连...");
             } finally {
                 Socket s = socket;
                 socket = null;
@@ -119,6 +139,8 @@ final class StreamClient {
         s.setReceiveBufferSize(1 << 20);
         s.connect(new InetSocketAddress(host, port), 3000);
         s.setSoTimeout(5000);
+        s.getOutputStream().write(HELLO_STREAM);
+        s.getOutputStream().flush();
         listener.onStatus("已连接, 等待画面...");
         DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream(), 1 << 16));
         boolean waitKey = true;

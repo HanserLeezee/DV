@@ -14,6 +14,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -29,7 +30,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** 连接页: 自动搜索局域网里的 DV 服务, 或手动输入 IP。 */
+/**
+ * 连接页。打开即自动连接: 先试 USB (127.0.0.1, 电脑端自动做了 adb reverse), 再搜局域网。
+ * 电脑端检测到 USB 手机时会用 adb 带上 host 参数直接拉起这里, 直接进入画面。
+ */
 public class MainActivity extends Activity {
 
     static final int TCP_PORT = 27183;
@@ -40,6 +44,8 @@ public class MainActivity extends Activity {
     private TextView searchStatus;
     private Button searchBtn;
     private volatile boolean searching;
+    private volatile boolean autoMode;
+    private volatile boolean autoConnected;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,7 +65,7 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("先在电脑上运行 dv_server, 再搜索或输入电脑 IP");
+        sub.setText("电脑上运行 DV.bat 后, 这里会自动连接");
         sub.setTextColor(Color.rgb(150, 160, 175));
         sub.setPadding(0, dp(4), 0, dp(24));
         root.addView(sub);
@@ -87,7 +93,7 @@ public class MainActivity extends Activity {
 
         searchBtn = new Button(this);
         searchBtn.setText("搜索局域网");
-        searchBtn.setOnClickListener(v -> startSearch());
+        searchBtn.setOnClickListener(v -> startSearch(false));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(16);
@@ -105,14 +111,57 @@ public class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
+        CheckBox autoBox = new CheckBox(this);
+        autoBox.setText("打开 App 时自动连接");
+        autoBox.setTextColor(Color.rgb(200, 205, 215));
+        autoBox.setChecked(prefs().getBoolean("auto", true));
+        autoBox.setOnCheckedChangeListener((b, on) -> prefs().edit().putBoolean("auto", on).apply());
+        root.addView(autoBox);
+
         TextView hint = new TextView(this);
-        hint.setText("有线模式: 电脑执行 adb reverse tcp:27183 tcp:27183, 然后这里填 127.0.0.1");
+        hint.setText("USB: 电脑运行 DV.bat 后插上手机, 会自动打开并连接");
         hint.setTextColor(Color.rgb(100, 110, 125));
         hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         root.addView(hint);
 
         setContentView(root);
-        startSearch();
+        if (!handleLaunchIntent(getIntent())) {
+            if (prefs().getBoolean("auto", true)) autoConnect();
+            else startSearch(false);
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleLaunchIntent(intent);
+    }
+
+    /** 电脑端通过 adb 拉起时带 host 参数, 直接连。 */
+    private boolean handleLaunchIntent(Intent intent) {
+        String host = intent != null ? intent.getStringExtra("host") : null;
+        if (host == null || host.isEmpty()) return false;
+        int port = intent.getIntExtra("port", TCP_PORT);
+        intent.removeExtra("host");
+        openStream(host, port, false);
+        return true;
+    }
+
+    /** 自动连接: USB 优先, 其次局域网里找到的第一台 (优先上次连过的)。 */
+    private void autoConnect() {
+        autoConnected = false;
+        searchStatus.setText("正在自动连接...");
+        new Thread(() -> {
+            if (StreamClient.probe("127.0.0.1", TCP_PORT, 400)) {
+                runOnUiThread(() -> {
+                    autoConnected = true;
+                    openStream("127.0.0.1", TCP_PORT, false);
+                });
+                return;
+            }
+            runOnUiThread(() -> startSearch(true));
+        }, "dv-auto").start();
     }
 
     private SharedPreferences prefs() {
@@ -137,7 +186,14 @@ public class MainActivity extends Activity {
             } catch (NumberFormatException ignored) {
             }
         }
-        prefs().edit().putString("last_ip", colon > 0 ? host + ":" + port : host).apply();
+        openStream(host, port, true);
+    }
+
+    private void openStream(String host, int port, boolean remember) {
+        if (remember) {
+            prefs().edit().putString("last_ip", port == TCP_PORT ? host : host + ":" + port).apply();
+        }
+        searchStatus.setText("");
         Intent i = new Intent(this, StreamActivity.class);
         i.putExtra("host", host);
         i.putExtra("port", port);
@@ -145,9 +201,10 @@ public class MainActivity extends Activity {
     }
 
     /** 向 255.255.255.255 和本网段广播地址发 "DV?", 收集 "DV!{json}" 回复。 */
-    private void startSearch() {
+    private void startSearch(boolean auto) {
         if (searching) return;
         searching = true;
+        autoMode = auto;
         searchBtn.setEnabled(false);
         searchStatus.setText("正在搜索...");
         serverList.removeAllViews();
@@ -186,6 +243,9 @@ public class MainActivity extends Activity {
                             found.put(key, o.optString("name", "PC"));
                             final String k = key, name = found.get(key);
                             runOnUiThread(() -> addServer(name, k));
+                            String last = prefs().getString("last_ip", "");
+                            // 自动模式: 上次连过的那台立刻连; 否则等搜完连第一台
+                            if (autoMode && key.equals(last)) break;
                         }
                     } catch (SocketTimeoutException ignored) {
                     }
@@ -195,9 +255,19 @@ public class MainActivity extends Activity {
             } finally {
                 if (sock != null) sock.close();
                 final int n = found.size();
+                String last = prefs().getString("last_ip", "");
+                final String pick = found.containsKey(last) ? last
+                        : (found.isEmpty() ? null : found.keySet().iterator().next());
+                final boolean wasAuto = autoMode;
                 runOnUiThread(() -> {
                     searching = false;
+                    autoMode = false;
                     searchBtn.setEnabled(true);
+                    if (wasAuto && pick != null && !autoConnected && !isFinishing()) {
+                        autoConnected = true;
+                        connect(pick);
+                        return;
+                    }
                     searchStatus.setText(n == 0
                             ? "没找到。确认电脑端已运行、在同一 Wi-Fi, 并在 Windows 防火墙里允许 Python"
                             : "找到 " + n + " 台电脑, 点击连接");

@@ -4,3 +4,7 @@ app/build/
 local.properties
 .idea/
 *.iml
+pc/ffmpeg.exe
+adb/*.exe
+adb/*.dll
+*.apk
